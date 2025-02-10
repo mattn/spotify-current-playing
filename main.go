@@ -40,6 +40,19 @@ type payload struct {
 	Title  string `json:"title"`
 }
 
+func (p *payload) Same(c *payload) bool {
+	return p.Artist != c.Artist || p.Album != c.Album || p.Title != c.Title
+}
+
+func (p *payload) JSON() string {
+	b, _ := json.Marshal(p)
+	return string(b)
+}
+
+func (p *payload) String() string {
+	return fmt.Sprintf("%s - %s", p.Artist, p.Title)
+}
+
 func openBrowser(url string) error {
 	var err error
 
@@ -200,8 +213,10 @@ func saveConfig(cfg *Config) error {
 func main() {
 	var jsonout bool
 	var oneshot bool
+	var verbose bool
 	flag.BoolVar(&jsonout, "json", false, "output json")
 	flag.BoolVar(&oneshot, "oneshot", false, "output once")
+	flag.BoolVar(&verbose, "verbose", false, "verbose")
 
 	flag.Parse()
 
@@ -213,30 +228,30 @@ func main() {
 	ctx := context.Background()
 	client := cfg.NewClient(ctx)
 
-	enc := json.NewEncoder(os.Stdout)
-	artist := ""
-	album := ""
-	title := ""
+	var prev payload
 	for {
 		curr, err := client.PlayerCurrentlyPlaying(ctx)
 		if err == nil {
-			if curr != nil && curr.Item != nil {
-				if artist != curr.Item.Artists[0].Name || album != curr.Item.Album.Name || curr.Item.Name != title {
+			if curr.Playing {
+				curr := payload{
+					Artist: curr.Item.Artists[0].Name,
+					Album:  curr.Item.Album.Name,
+					Title:  curr.Item.Name,
+				}
+				if verbose {
+					log.Print(curr.JSON())
+				}
+				if !prev.Same(&curr) {
 					if jsonout {
-						enc.Encode(payload{
-							Album: curr.Item.Artists[0].Name,
-							Title: curr.Item.Name,
-						})
+						fmt.Println(curr.JSON())
 					} else {
-						fmt.Printf("%s - %s\n", curr.Item.Artists[0].Name, curr.Item.Name)
+						fmt.Println(curr.String())
 					}
 					if oneshot {
 						break
 					}
 				}
-				artist = curr.Item.Artists[0].Name
-				album = curr.Item.Album.Name
-				title = curr.Item.Name
+				prev = curr
 			}
 		} else {
 			if strings.Contains(err.Error(), "The access token expired") {
