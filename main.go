@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -18,8 +19,6 @@ import (
 	"github.com/zmb3/spotify"
 	"golang.org/x/oauth2"
 )
-
-const clientID = "3f346211357e42039295e0f0ad995fe9"
 
 type Config struct {
 	ClientID string        `json:"client_id"`
@@ -82,6 +81,13 @@ func loadConfig() (*Config, error) {
 			return &cfg, nil
 		}
 	}
+
+	fmt.Print("ClientID: ")
+	stdin := bufio.NewScanner(os.Stdin)
+	if !stdin.Scan() {
+		return nil, fmt.Errorf("canceled")
+	}
+	clientID := stdin.Text()
 
 	cvInstance, err := cv.CreateCodeVerifier()
 	if err != nil {
