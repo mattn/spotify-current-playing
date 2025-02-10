@@ -74,25 +74,37 @@ func loadConfig() (*Config, error) {
 	}
 	auth := spotifyauth.New(
 		spotifyauth.WithRedirectURL("http://localhost:3000/callback"),
-		spotifyauth.WithScopes(scopes...))
+		spotifyauth.WithScopes(scopes...),
+	)
 
 	var cfg Config
 
 	b, err := os.ReadFile(configFile)
 	if err == nil {
 		err = json.Unmarshal(b, &cfg)
-		if err == nil {
+		if err == nil && cfg.Token.Valid() {
+			auth := spotifyauth.New(
+				spotifyauth.WithClientID(cfg.ClientID),
+				spotifyauth.WithScopes(scopes...),
+			)
 			cfg.auth = auth
+
+			cfg.configFile = configFile
 			return &cfg, nil
 		}
 	}
 
-	fmt.Print("ClientID: ")
-	stdin := bufio.NewScanner(os.Stdin)
-	if !stdin.Scan() {
-		return nil, fmt.Errorf("canceled")
+	var clientID string
+	if cfg.ClientID != "" {
+		clientID = cfg.ClientID
+	} else {
+		fmt.Print("ClientID: ")
+		stdin := bufio.NewScanner(os.Stdin)
+		if !stdin.Scan() {
+			return nil, fmt.Errorf("canceled")
+		}
+		clientID = stdin.Text()
 	}
-	clientID := stdin.Text()
 
 	cvInstance, err := cv.CreateCodeVerifier()
 	if err != nil {
@@ -227,14 +239,10 @@ func main() {
 				title = curr.Item.Name
 			}
 		} else {
-			log.Println(err)
-			if strings.Contains(err.Error(), "invalid_client") || strings.Contains(err.Error(), "The access token expired") {
-				tok, err := client.Token()
+			if strings.Contains(err.Error(), "The access token expired") {
+				refresh, err := client.Token()
 				if err == nil {
-					println("UPDATE", tok.Expiry.String())
-					cfg.Token = tok
-					client = cfg.NewClient(ctx)
-					println("UPDATE")
+					cfg.Token = refresh
 					saveConfig(cfg)
 				}
 			} else {
