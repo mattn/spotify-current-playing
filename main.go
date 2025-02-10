@@ -22,6 +22,12 @@ import (
 	"golang.org/x/oauth2"
 )
 
+const name = "spotify-current-playing"
+
+const version = "0.0.0"
+
+var revision = "HEAD"
+
 type Config struct {
 	ClientID string        `json:"client_id"`
 	Token    *oauth2.Token `json:"token"`
@@ -214,11 +220,18 @@ func main() {
 	var jsonout bool
 	var oneshot bool
 	var verbose bool
+	var showVersion bool
 	flag.BoolVar(&jsonout, "json", false, "output json")
 	flag.BoolVar(&oneshot, "oneshot", false, "output once")
 	flag.BoolVar(&verbose, "verbose", false, "verbose")
+	flag.BoolVar(&showVersion, "v", false, "version")
 
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("%s %s (rev: %s/%s)\n", name, version, revision, runtime.Version())
+		return
+	}
 
 	cfg, err := loadConfig()
 	if err != nil {
