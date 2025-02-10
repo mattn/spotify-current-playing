@@ -12,11 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	cv "github.com/nirasan/go-oauth-pkce-code-verifier"
 
-	"github.com/zmb3/spotify"
+	"github.com/zmb3/spotify/v2"
+	"github.com/zmb3/spotify/v2/auth"
 	"golang.org/x/oauth2"
 )
 
@@ -24,11 +26,12 @@ type Config struct {
 	ClientID string        `json:"client_id"`
 	Token    *oauth2.Token `json:"token"`
 
-	auth spotify.Authenticator
+	auth       *spotifyauth.Authenticator
+	configFile string
 }
 
-func (c *Config) NewClient() spotify.Client {
-	return c.auth.NewClient(c.Token)
+func (c *Config) NewClient(ctx context.Context) *spotify.Client {
+	return spotify.New(oauth2.NewClient(ctx, oauth2.StaticTokenSource(c.Token)))
 }
 
 type payload struct {
@@ -62,14 +65,16 @@ func loadConfig() (*Config, error) {
 	configFile := filepath.Join(configDir, "config.json")
 
 	scopes := []string{
-		spotify.ScopeUserReadPrivate,
-		spotify.ScopeUserReadCurrentlyPlaying,
-		spotify.ScopeUserReadPlaybackState,
-		spotify.ScopeUserModifyPlaybackState,
-		spotify.ScopeUserLibraryModify,
-		spotify.ScopeUserLibraryRead,
+		spotifyauth.ScopeUserReadPrivate,
+		spotifyauth.ScopeUserReadCurrentlyPlaying,
+		spotifyauth.ScopeUserReadPlaybackState,
+		spotifyauth.ScopeUserModifyPlaybackState,
+		spotifyauth.ScopeUserLibraryModify,
+		spotifyauth.ScopeUserLibraryRead,
 	}
-	auth := spotify.NewAuthenticator("http://localhost:3000/callback", scopes...)
+	auth := spotifyauth.New(
+		spotifyauth.WithRedirectURL("http://localhost:3000/callback"),
+		spotifyauth.WithScopes(scopes...))
 
 	var cfg Config
 
@@ -112,7 +117,7 @@ func loadConfig() (*Config, error) {
 				return
 			}
 
-			tok, err := auth.TokenWithOpts(state, r,
+			tok, err := auth.Token(r.Context(), state, r,
 				oauth2.SetAuthURLParam("client_id", clientID),
 				oauth2.SetAuthURLParam("code_verifier", codeVerifier))
 			if err != nil {
@@ -130,7 +135,7 @@ func loadConfig() (*Config, error) {
 	}
 	go server.ListenAndServe()
 
-	url := auth.AuthURLWithOpts(state,
+	url := auth.AuthURL(state,
 		oauth2.SetAuthURLParam("client_id", clientID),
 		oauth2.SetAuthURLParam("code_challenge_method", "S256"),
 		oauth2.SetAuthURLParam("code_challenge", codeChallenge),
@@ -141,26 +146,19 @@ func loadConfig() (*Config, error) {
 		return nil, err
 	}
 
-	cfg.auth = auth
-	cfg.ClientID = clientID
-	cfg.Token = <-tokenCh
+	cfg = Config{
+		ClientID:   clientID,
+		Token:      <-tokenCh,
+		auth:       auth,
+		configFile: configFile,
+	}
 
 	err = server.Shutdown(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
-	b, err = json.Marshal(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	err = os.MkdirAll(configDir, 0700)
-	if err != nil {
-		return nil, err
-	}
-
-	err = os.WriteFile(configFile, b, 0644)
+	err = saveConfig(&cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -168,9 +166,31 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
+func saveConfig(cfg *Config) error {
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(filepath.Dir(cfg.configFile), 0700)
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(cfg.configFile, b, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func main() {
-	var j bool
-	flag.BoolVar(&j, "json", false, "output json")
+	var jsonout bool
+	var oneshot bool
+	flag.BoolVar(&jsonout, "json", false, "output json")
+	flag.BoolVar(&oneshot, "oneshot", false, "output once")
+
 	flag.Parse()
 
 	cfg, err := loadConfig()
@@ -178,24 +198,28 @@ func main() {
 		log.Fatal(err)
 	}
 
-	client := cfg.NewClient()
+	ctx := context.Background()
+	client := cfg.NewClient(ctx)
 
 	enc := json.NewEncoder(os.Stdout)
 	artist := ""
 	album := ""
 	title := ""
 	for {
-		curr, err := client.PlayerCurrentlyPlaying()
+		curr, err := client.PlayerCurrentlyPlaying(ctx)
 		if err == nil {
 			if curr != nil && curr.Item != nil {
 				if artist != curr.Item.Artists[0].Name || album != curr.Item.Album.Name || curr.Item.Name != title {
-					if j {
+					if jsonout {
 						enc.Encode(payload{
 							Album: curr.Item.Artists[0].Name,
 							Title: curr.Item.Name,
 						})
 					} else {
 						fmt.Printf("%s - %s\n", curr.Item.Artists[0].Name, curr.Item.Name)
+					}
+					if oneshot {
+						break
 					}
 				}
 				artist = curr.Item.Artists[0].Name
@@ -204,6 +228,18 @@ func main() {
 			}
 		} else {
 			log.Println(err)
+			if strings.Contains(err.Error(), "invalid_client") || strings.Contains(err.Error(), "The access token expired") {
+				tok, err := client.Token()
+				if err == nil {
+					println("UPDATE", tok.Expiry.String())
+					cfg.Token = tok
+					client = cfg.NewClient(ctx)
+					println("UPDATE")
+					saveConfig(cfg)
+				}
+			} else {
+				log.Println(err)
+			}
 		}
 		time.Sleep(10 * time.Second)
 	}
