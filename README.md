@@ -25,7 +25,7 @@ https://developer.spotify.com/
 ## Installation
 
 ```
-go install github.com/mattn/spotify-current-playing
+go install github.com/mattn/spotify-current-playing@latest
 ```
 
 ## License
